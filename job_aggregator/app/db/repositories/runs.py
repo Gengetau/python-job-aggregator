@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from job_aggregator.app.db.models import CrawlRun, CrawlRunError
+from job_aggregator.app.db.models import CrawlRun, CrawlRunAdapterState, CrawlRunError
 
 
 class RunsRepository:
@@ -49,6 +49,49 @@ class RunsRepository:
             .limit(limit)
         )
         return list(self.session.scalars(statement))
+
+    def list_adapter_states(self, run_id: int) -> Sequence[CrawlRunAdapterState]:
+        """Return adapter checkpoint states captured for a run."""
+
+        statement = (
+            select(CrawlRunAdapterState)
+            .where(CrawlRunAdapterState.run_id == run_id)
+            .order_by(CrawlRunAdapterState.id.asc())
+        )
+        return list(self.session.scalars(statement))
+
+    def create_adapter_state(
+        self,
+        run: CrawlRun,
+        *,
+        adapter_name: str,
+        scope_key: str,
+        checkpoint_before: str | None,
+    ) -> CrawlRunAdapterState:
+        """Create a per-adapter state row before an adapter executes."""
+
+        state = CrawlRunAdapterState(
+            run=run,
+            adapter_name=adapter_name,
+            scope_key=scope_key,
+            checkpoint_before=checkpoint_before,
+            checkpoint_after=checkpoint_before,
+        )
+        self.session.add(state)
+        self.session.flush()
+        return state
+
+    def finish_adapter_state(
+        self,
+        state: CrawlRunAdapterState,
+        *,
+        checkpoint_after: str | None,
+    ) -> CrawlRunAdapterState:
+        """Persist the checkpoint observed after an adapter execution."""
+
+        state.checkpoint_after = checkpoint_after
+        self.session.flush()
+        return state
 
     def finish_run(
         self,

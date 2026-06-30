@@ -124,6 +124,49 @@ class CrawlRun(Base):
         back_populates="run",
         cascade="all, delete-orphan",
     )
+    adapter_states: Mapped[list[CrawlRunAdapterState]] = relationship(
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
+
+
+class CrawlRunAdapterState(Base):
+    """Per-adapter checkpoint state captured for one crawl run."""
+
+    __tablename__ = "crawl_run_adapter_states"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "adapter_name",
+            "scope_key",
+            name="uq_crawl_run_adapter_states_run_adapter_scope",
+        ),
+        Index("ix_crawl_run_adapter_states_run_id", "run_id"),
+        Index("ix_crawl_run_adapter_states_adapter_name", "adapter_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("crawl_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    adapter_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    scope_key: Mapped[str] = mapped_column(String(240), nullable=False)
+    checkpoint_before: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checkpoint_after: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+    run: Mapped[CrawlRun] = relationship(back_populates="adapter_states")
 
 
 class CrawlRunError(Base):

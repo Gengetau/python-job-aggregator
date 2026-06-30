@@ -1,5 +1,7 @@
 import sqlite3
 from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from uuid import uuid4
 
 import pytest
@@ -58,6 +60,26 @@ def shared_memory_database(prefix: str) -> tuple[str, sqlite3.Connection]:
     return url, keeper
 
 
+def serve_html(html: str) -> tuple[ThreadingHTTPServer, str]:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            encoded = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    return server, f"http://{host}:{port}/careers"
+
+
 def test_init_database_creates_core_tables() -> None:
     engine = init_database("sqlite:///:memory:")
 
@@ -66,6 +88,7 @@ def test_init_database_creates_core_tables() -> None:
     assert {
         "jobs",
         "crawl_runs",
+        "crawl_run_adapter_states",
         "crawl_run_errors",
         "source_checkpoints",
     }.issubset(table_names)
@@ -82,7 +105,9 @@ def test_upgrade_database_applies_alembic_schema() -> None:
         keeper.close()
 
     assert "alembic_version" in table_names
-    assert {"jobs", "crawl_runs", "source_checkpoints"}.issubset(table_names)
+    assert {"jobs", "crawl_runs", "crawl_run_adapter_states", "source_checkpoints"}.issubset(
+        table_names
+    )
 
 
 def test_jobs_repository_creates_and_queries_job(session: Session) -> None:
@@ -146,6 +171,28 @@ def test_runs_repository_tracks_errors_and_summary(session: Session) -> None:
     assert error.run_id == run.id
 
 
+def test_runs_repository_tracks_adapter_state(session: Session) -> None:
+    repository = RunsRepository(session)
+    run = repository.create_run(trigger_type="manual", adapter_scope="demo")
+
+    state = repository.create_adapter_state(
+        run,
+        adapter_name="demo",
+        scope_key="fixture",
+        checkpoint_before="before",
+    )
+    repository.finish_adapter_state(state, checkpoint_after="after")
+    session.commit()
+
+    states = repository.list_adapter_states(run.id)
+
+    assert len(states) == 1
+    assert states[0].adapter_name == "demo"
+    assert states[0].scope_key == "fixture"
+    assert states[0].checkpoint_before == "before"
+    assert states[0].checkpoint_after == "after"
+
+
 def test_checkpoints_repository_upserts_cursor(session: Session) -> None:
     repository = CheckpointsRepository(session)
 
@@ -207,11 +254,15 @@ def test_cli_db_init_command() -> None:
 
 def test_cli_crawl_run_demo_command() -> None:
     runner = CliRunner()
+    database_url, keeper = shared_memory_database("cli_demo")
 
-    result = runner.invoke(
-        app,
-        ["crawl", "run", "--database-url", "sqlite:///:memory:"],
-    )
+    try:
+        result = runner.invoke(
+            app,
+            ["crawl", "run", "--database-url", database_url],
+        )
+    finally:
+        keeper.close()
 
     assert result.exit_code == 0
     assert "running_adapters=demo" in result.output
@@ -221,11 +272,15 @@ def test_cli_crawl_run_demo_command() -> None:
 
 def test_cli_crawl_run_all_reports_explicit_adapter_set() -> None:
     runner = CliRunner()
+    database_url, keeper = shared_memory_database("cli_all")
 
-    result = runner.invoke(
-        app,
-        ["crawl", "run", "--all", "--database-url", "sqlite:///:memory:"],
-    )
+    try:
+        result = runner.invoke(
+            app,
+            ["crawl", "run", "--all", "--database-url", database_url],
+        )
+    finally:
+        keeper.close()
 
     assert result.exit_code == 0
     assert "running_adapters=demo" in result.output
@@ -237,10 +292,21 @@ def test_cli_crawl_resume_uses_previous_run_scope_and_checkpoint() -> None:
 
     try:
         run_result = runner.invoke(app, ["crawl", "run", "--database-url", database_url])
+        engine = make_engine(database_url)
+        session_factory = create_session_factory(engine)
+        with session_factory() as session:
+            CheckpointsRepository(session).upsert(
+                adapter_name="demo",
+                scope_key="fixture",
+                cursor_value="newer-global-checkpoint",
+            )
+            session.commit()
         resume_result = runner.invoke(
             app,
             ["crawl", "resume", "--run-id", "1", "--database-url", database_url],
         )
+        with session_factory() as session:
+            resumed_states = RunsRepository(session).list_adapter_states(2)
     finally:
         keeper.close()
 
@@ -248,8 +314,14 @@ def test_cli_crawl_resume_uses_previous_run_scope_and_checkpoint() -> None:
     assert resume_result.exit_code == 0
     assert "resuming_from_run_id=1" in resume_result.output
     assert "resuming_adapters=demo" in resume_result.output
-    assert "resume_context adapter=demo scope_key=fixture" in resume_result.output
+    assert (
+        "resume_context adapter=demo scope_key=fixture checkpoint=demo-complete"
+        in resume_result.output
+    )
     assert "running_adapters=demo" in resume_result.output
+    assert len(resumed_states) == 1
+    assert resumed_states[0].checkpoint_before == "demo-complete"
+    assert resumed_states[0].checkpoint_after == "demo-complete"
 
 
 def test_cli_jobs_dedupe_outputs_candidate_groups() -> None:
@@ -257,7 +329,8 @@ def test_cli_jobs_dedupe_outputs_candidate_groups() -> None:
     database_url, keeper = shared_memory_database("dedupe")
 
     try:
-        engine = init_database(database_url)
+        upgrade_database(database_url)
+        engine = make_engine(database_url)
         session_factory = create_session_factory(engine)
         with session_factory() as session:
             repository = JobsRepository(session)
@@ -267,15 +340,71 @@ def test_cli_jobs_dedupe_outputs_candidate_groups() -> None:
                     source_name="lever",
                     source_job_id="job-456",
                     source_url="https://lever.example.com/jobs/456",
+                    is_active=False,
                     raw_hash="hash-v2",
                 )
             )
             session.commit()
 
-        result = runner.invoke(app, ["jobs", "dedupe", "--database-url", database_url])
+        active_result = runner.invoke(app, ["jobs", "dedupe", "--database-url", database_url])
+        inactive_result = runner.invoke(
+            app,
+            [
+                "jobs",
+                "dedupe",
+                "--include-inactive",
+                "--limit",
+                "1",
+                "--scanned-limit",
+                "10",
+                "--database-url",
+                database_url,
+            ],
+        )
     finally:
         keeper.close()
 
+    assert active_result.exit_code == 0
+    assert "include_inactive=False" in active_result.output
+    assert "candidate_groups=0" in active_result.output
+    assert inactive_result.exit_code == 0
+    assert "include_inactive=True" in inactive_result.output
+    assert "candidate_groups=1" in inactive_result.output
+    assert "confidence=0.95" in inactive_result.output
+
+
+def test_cli_crawl_run_custom_page_listing_url() -> None:
+    runner = CliRunner()
+    database_url, keeper = shared_memory_database("custom_page")
+    html = """
+    <article class="job" data-id="custom-1">
+      <a class="title" href="/careers/custom-1">Product Engineer</a>
+      <span class="location">Remote</span>
+    </article>
+    """
+    server, listing_url = serve_html(html)
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "crawl",
+                "run",
+                "--adapter",
+                "custom_page",
+                "--listing-url",
+                listing_url,
+                "--company",
+                "Example",
+                "--database-url",
+                database_url,
+            ],
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        keeper.close()
+
     assert result.exit_code == 0
-    assert "candidate_groups=1" in result.output
-    assert "confidence=0.95" in result.output
+    assert "running_adapters=custom_page" in result.output
+    assert "jobs_created=1" in result.output

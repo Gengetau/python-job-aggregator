@@ -77,7 +77,7 @@ def session_scope(session_factory: sessionmaker[Session]) -> Iterator[Session]:
 
 
 def init_database(database_url: str | None = None, *, echo: bool = False) -> Engine:
-    """Initialize database tables and return the created engine."""
+    """Explicitly create metadata tables, primarily for tests."""
 
     engine = make_engine(database_url, echo=echo)
     Base.metadata.create_all(bind=engine)

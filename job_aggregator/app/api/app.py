@@ -14,7 +14,7 @@ from job_aggregator.app.adapters.greenhouse import GreenhouseAdapter
 from job_aggregator.app.adapters.lever import LeverAdapter
 from job_aggregator.app.api.routes import admin, dedupe, health, jobs, runs, sources
 from job_aggregator.app.core.config import get_settings
-from job_aggregator.app.db.session import create_session_factory, init_database
+from job_aggregator.app.db.session import create_session_factory, make_engine, upgrade_database
 
 
 def create_app(
@@ -32,7 +32,8 @@ def create_app(
 
     if session_factory is None:
         database_url = get_settings().database_url
-        engine = init_database(database_url)
+        upgrade_database(database_url)
+        engine = make_engine(database_url)
         session_factory = create_session_factory(engine)
 
     app.state.session_factory = session_factory

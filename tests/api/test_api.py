@@ -1,3 +1,6 @@
+import sqlite3
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -30,6 +33,13 @@ def job_values(**overrides: object) -> dict[str, object]:
     return values
 
 
+def shared_memory_database(prefix: str) -> tuple[str, sqlite3.Connection]:
+    name = f"{prefix}_{uuid4().hex}"
+    keeper = sqlite3.connect(f"file:{name}?mode=memory&cache=shared", uri=True)
+    url = f"sqlite:///file:{name}?mode=memory&cache=shared&uri=true"
+    return url, keeper
+
+
 @pytest.fixture()
 def client() -> TestClient:
     engine = make_engine("sqlite:///:memory:")
@@ -58,12 +68,16 @@ def test_openapi_schema_is_generated(client: TestClient) -> None:
 def test_create_app_initializes_configured_in_memory_database(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("JOB_AGGREGATOR_DATABASE_URL", "sqlite:///:memory:")
-    get_settings.cache_clear()
-    app = create_app(adapters=[DemoAdapter()])
-    client = TestClient(app)
+    database_url, keeper = shared_memory_database("api_app")
+    try:
+        monkeypatch.setenv("JOB_AGGREGATOR_DATABASE_URL", database_url)
+        get_settings.cache_clear()
+        app = create_app(adapters=[DemoAdapter()])
+        client = TestClient(app)
 
-    response = client.get("/jobs")
+        response = client.get("/jobs")
+    finally:
+        keeper.close()
 
     assert response.status_code == 200
     assert response.json()["total"] == 0
@@ -139,6 +153,7 @@ def test_dedupe_candidates_endpoint_returns_cross_source_groups() -> None:
                 source_name="lever",
                 source_job_id="job-456",
                 source_url="https://lever.example.com/jobs/456",
+                is_active=False,
                 raw_hash="hash-v2",
             )
         )
@@ -150,9 +165,12 @@ def test_dedupe_candidates_endpoint_returns_cross_source_groups() -> None:
     client = TestClient(app)
 
     response = client.get("/dedupe/candidates")
+    inactive_response = client.get("/dedupe/candidates", params={"include_inactive": True})
 
     assert response.status_code == 200
-    payload = response.json()
+    assert response.json() == []
+    assert inactive_response.status_code == 200
+    payload = inactive_response.json()
     assert len(payload) == 1
     assert payload[0]["confidence"] == 0.95
     assert {job["source_name"] for job in payload[0]["jobs"]} == {"greenhouse", "lever"}

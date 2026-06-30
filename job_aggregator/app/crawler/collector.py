@@ -50,6 +50,7 @@ class Collector:
         adapter_names: set[str] | None = None,
         trigger_type: str = "manual",
         contexts: Mapping[str, AdapterContext] | None = None,
+        checkpoint_source: str = "latest",
     ) -> CollectorResult:
         """Run selected adapters and persist crawl summaries."""
 
@@ -80,7 +81,19 @@ class Collector:
                     extra={"adapter": adapter.name, "run_id": run.id},
                 )
                 base_context = contexts.get(adapter.name) if contexts else None
-                adapter_context = context_with_checkpoint(adapter, checkpoints, base_context)
+                adapter_context = context_with_checkpoint(
+                    adapter,
+                    checkpoints,
+                    base_context,
+                    checkpoint_source=checkpoint_source,
+                )
+                adapter_state = runs.create_adapter_state(
+                    run,
+                    adapter_name=adapter.name,
+                    scope_key=checkpoint_scope(adapter, adapter_context),
+                    checkpoint_before=adapter_context.checkpoint,
+                )
+                session.commit()
                 try:
                     result = await adapter.fetch_jobs(adapter_context)
                 except Exception as exc:
@@ -90,6 +103,10 @@ class Collector:
                         stage="adapter",
                         error_type=exc.__class__.__name__,
                         message=str(exc),
+                    )
+                    runs.finish_adapter_state(
+                        adapter_state,
+                        checkpoint_after=adapter_context.checkpoint,
                     )
                     session.commit()
                     continue
@@ -113,12 +130,17 @@ class Collector:
                     elif status == "updated":
                         counts["updated"] += 1
 
+                checkpoint_after = result.next_checkpoint or adapter_context.checkpoint
                 if result.next_checkpoint:
                     checkpoints.upsert(
                         adapter_name=adapter.name,
                         scope_key=checkpoint_scope(adapter, adapter_context),
                         cursor_value=result.next_checkpoint,
                     )
+                runs.finish_adapter_state(
+                    adapter_state,
+                    checkpoint_after=checkpoint_after,
+                )
 
                 session.commit()
 

@@ -16,12 +16,21 @@ def context_with_checkpoint(
     adapter: BaseJobAdapter,
     repository: CheckpointsRepository,
     context: AdapterContext | None = None,
+    *,
+    checkpoint_source: str = "latest",
 ) -> AdapterContext:
     """Return context populated with any persisted checkpoint."""
 
     scope_key = checkpoint_scope(adapter, context)
-    checkpoint = repository.get(adapter.name, scope_key)
     options = dict(context.options) if context else {}
+    if checkpoint_source == "context":
+        return AdapterContext(
+            scope_key=scope_key,
+            checkpoint=context.checkpoint if context else None,
+            options=options,
+        )
+
+    checkpoint = repository.get(adapter.name, scope_key)
     return AdapterContext(
         scope_key=scope_key,
         checkpoint=checkpoint.cursor_value if checkpoint else None,

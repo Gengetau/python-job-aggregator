@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
 import typer
 
 from job_aggregator import __version__
 from job_aggregator.app.adapters import (
     CustomPageAdapter,
+    CustomPageConfig,
     DemoAdapter,
     GreenhouseAdapter,
     LeverAdapter,
@@ -20,10 +24,9 @@ from job_aggregator.app.core.config import get_settings
 from job_aggregator.app.core.logging import configure_logging
 from job_aggregator.app.crawler.collector import Collector
 from job_aggregator.app.crawler.contexts import context_from_options
-from job_aggregator.app.db.repositories.checkpoints import CheckpointsRepository
 from job_aggregator.app.db.repositories.jobs import JobsRepository
 from job_aggregator.app.db.repositories.runs import RunsRepository
-from job_aggregator.app.db.session import create_session_factory, init_database, upgrade_database
+from job_aggregator.app.db.session import create_session_factory, make_engine, upgrade_database
 
 app = typer.Typer(help="Operate the Python Job Aggregator service.")
 db_app = typer.Typer(help="Manage local database schema.")
@@ -67,7 +70,8 @@ def status() -> None:
 def _session_factory(database_url: str | None = None):
     settings = get_settings()
     resolved_url = database_url or settings.database_url
-    engine = init_database(resolved_url)
+    upgrade_database(resolved_url)
+    engine = make_engine(resolved_url)
     return create_session_factory(engine), resolved_url
 
 
@@ -98,8 +102,18 @@ def _cli_context(
     scope: str | None,
     company: str | None,
     api_url: str | None,
+    config_file: Path | None,
+    listing_url: str | None,
 ) -> AdapterContext | None:
-    options: dict[str, str] = {}
+    options: dict[str, Any] = {}
+    if adapter_name == "custom_page":
+        options.update(
+            _custom_page_options(
+                config_file=config_file,
+                listing_url=listing_url,
+                company=company,
+            )
+        )
     if scope:
         if adapter_name == "greenhouse":
             options["board_token"] = scope
@@ -114,18 +128,41 @@ def _cli_context(
     return context_from_options(options) if options else None
 
 
-def _resume_contexts(
-    adapter_names: list[str],
-    database_url: str | None,
-) -> dict[str, AdapterContext]:
+def _custom_page_options(
+    *,
+    config_file: Path | None,
+    listing_url: str | None,
+    company: str | None,
+) -> dict[str, Any]:
+    if config_file is not None:
+        try:
+            values = json.loads(config_file.read_text(encoding="utf-8"))
+            config = CustomPageConfig.model_validate(values)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise typer.BadParameter(f"Invalid custom page config file: {exc}") from exc
+        config_values = config.model_dump()
+        if company:
+            config_values["company_name"] = company
+        return config_values
+
+    if listing_url:
+        if not company:
+            raise typer.BadParameter("--company is required when --listing-url is used.")
+        return CustomPageConfig(company_name=company, listing_url=listing_url).model_dump()
+
+    raise typer.BadParameter("custom_page requires --config-file or --listing-url.")
+
+
+def _resume_contexts(run_id: int, database_url: str | None) -> dict[str, AdapterContext]:
     session_factory, _resolved_url = _session_factory(database_url)
     contexts: dict[str, AdapterContext] = {}
     with session_factory() as session:
-        checkpoints = CheckpointsRepository(session)
-        for adapter_name in adapter_names:
-            checkpoint = checkpoints.latest_for_adapter(adapter_name)
-            if checkpoint is not None:
-                contexts[adapter_name] = AdapterContext(scope_key=checkpoint.scope_key)
+        states = RunsRepository(session).list_adapter_states(run_id)
+        for state in states:
+            contexts[state.adapter_name] = AdapterContext(
+                scope_key=state.scope_key,
+                checkpoint=state.checkpoint_after,
+            )
     return contexts
 
 
@@ -139,11 +176,13 @@ async def _run_collector(
     database_url: str | None = None,
     trigger_type: str = "manual",
     contexts: Mapping[str, AdapterContext] | None = None,
+    checkpoint_source: str = "latest",
 ) -> None:
     session_factory, resolved_url = _session_factory(database_url)
     result = await Collector(adapters=adapters, session_factory=session_factory).run(
         trigger_type=trigger_type,
         contexts=contexts,
+        checkpoint_source=checkpoint_source,
     )
     typer.echo(f"database_url={resolved_url}")
     typer.echo(f"running_adapters={_format_adapter_names(adapters)}")
@@ -217,6 +256,20 @@ def crawl_run(
         "--api-url",
         help="Override source API URL, useful for fixture/demo runs.",
     ),
+    config_file: Path | None = typer.Option(
+        None,
+        "--config-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="JSON CustomPageConfig file for the custom_page adapter.",
+    ),
+    listing_url: str | None = typer.Option(
+        None,
+        "--listing-url",
+        help="Careers page URL for the custom_page adapter using default selectors.",
+    ),
     database_url: str | None = typer.Option(None, "--database-url"),
 ) -> None:
     """Run a crawl."""
@@ -230,6 +283,8 @@ def crawl_run(
             scope=scope,
             company=company,
             api_url=api_url,
+            config_file=config_file,
+            listing_url=listing_url,
         )
         if context is not None:
             contexts[adapter_instance.name] = context
@@ -258,29 +313,42 @@ def crawl_resume(
         run = RunsRepository(session).get(run_id)
         if run is None:
             raise typer.BadParameter(f"No crawl run found for run_id={run_id}")
-        adapter_names = _adapter_names_from_scope(run.adapter_scope)
+        states = RunsRepository(session).list_adapter_states(run_id)
+        adapter_names = [state.adapter_name for state in states]
 
     if not adapter_names:
-        raise typer.BadParameter(f"Run {run_id} has no adapter scope to resume.")
+        raise typer.BadParameter(f"Run {run_id} has no adapter state to resume.")
 
     adapters = [_adapter_for(adapter_name) for adapter_name in adapter_names]
-    contexts = _resume_contexts(adapter_names, database_url)
+    contexts = _resume_contexts(run_id, database_url)
     typer.echo(f"resuming_from_run_id={run_id}")
     typer.echo(f"resuming_adapters={_format_adapter_names(adapters)}")
     for adapter_name, context in contexts.items():
-        typer.echo(f"resume_context adapter={adapter_name} scope_key={context.scope_key}")
+        checkpoint = context.checkpoint or "<none>"
+        typer.echo(
+            f"resume_context adapter={adapter_name} "
+            f"scope_key={context.scope_key} checkpoint={checkpoint}"
+        )
     asyncio.run(
         _run_collector(
             adapters=adapters,
             database_url=database_url,
             trigger_type="manual",
             contexts=contexts,
+            checkpoint_source="context",
         )
     )
 
 
 @jobs_app.command("dedupe")
 def jobs_dedupe(
+    limit: int = typer.Option(50, "--limit", min=1, max=100),
+    scanned_limit: int = typer.Option(1000, "--scanned-limit", min=1, max=5000),
+    include_inactive: bool = typer.Option(
+        False,
+        "--include-inactive",
+        help="Include inactive jobs in duplicate candidate review.",
+    ),
     database_url: str | None = typer.Option(None, "--database-url"),
 ) -> None:
     """Show conservative cross-source dedupe candidates."""
@@ -288,8 +356,13 @@ def jobs_dedupe(
     session_factory, _resolved_url = _session_factory(database_url)
     with session_factory() as session:
         repository = JobsRepository(session)
-        candidates = repository.duplicate_candidates()
+        candidates = repository.duplicate_candidates(
+            limit=limit,
+            scanned_limit=scanned_limit,
+            active_only=not include_inactive,
+        )
         typer.echo(f"jobs_total={repository.count()}")
+        typer.echo(f"include_inactive={include_inactive}")
         typer.echo(f"candidate_groups={len(candidates)}")
         for index, candidate in enumerate(candidates, start=1):
             typer.echo(
