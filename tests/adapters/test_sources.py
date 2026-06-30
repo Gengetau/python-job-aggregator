@@ -1,11 +1,31 @@
 import json
 from pathlib import Path
 
+import httpx
+import pytest
+
 from job_aggregator.app.adapters.custom_page import CustomPageAdapter, CustomPageConfig
 from job_aggregator.app.adapters.greenhouse import GreenhouseAdapter
 from job_aggregator.app.adapters.lever import LeverAdapter
+from job_aggregator.app.fetchers.http import HttpFetcher
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+class SpyFetcher:
+    def __init__(self) -> None:
+        self.entered = False
+        self.closed = False
+
+    async def __aenter__(self) -> "SpyFetcher":
+        self.entered = True
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        self.closed = True
+
+    async def get_json(self, url: str) -> dict[str, list[object]]:
+        return {"jobs": []}
 
 
 def test_greenhouse_adapter_parses_fixture_json() -> None:
@@ -50,3 +70,36 @@ def test_custom_page_adapter_parses_fixture_html() -> None:
     assert jobs[0].source_url == "https://example.com/careers/custom-1"
     assert jobs[0].title == "Product Engineer"
     assert jobs[0].location_text == "Hybrid / Tokyo"
+
+
+@pytest.mark.asyncio
+async def test_greenhouse_adapter_closes_owned_temporary_fetcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spy = SpyFetcher()
+    monkeypatch.setattr("job_aggregator.app.adapters.greenhouse.HttpFetcher", lambda: spy)
+
+    result = await GreenhouseAdapter(api_url="https://example.test/jobs").fetch_jobs()
+
+    assert result.errors_count == 0
+    assert spy.entered is True
+    assert spy.closed is True
+
+
+@pytest.mark.asyncio
+async def test_greenhouse_adapter_does_not_close_injected_fetcher_client() -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"jobs": []}, request=request)
+    )
+    client = httpx.AsyncClient(transport=transport)
+    try:
+        fetcher = HttpFetcher(client=client)
+        result = await GreenhouseAdapter(
+            fetcher=fetcher,
+            api_url="https://example.test/jobs",
+        ).fetch_jobs()
+
+        assert result.errors_count == 0
+        assert client.is_closed is False
+    finally:
+        await client.aclose()

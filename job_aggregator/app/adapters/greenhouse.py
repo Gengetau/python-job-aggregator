@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from job_aggregator.app.adapters.base import (
@@ -84,9 +84,12 @@ class GreenhouseAdapter(BaseJobAdapter):
                 ]
             )
 
-        fetcher = self.fetcher or HttpFetcher()
         try:
-            payload = await fetcher.get_json(api_url)
+            if self.fetcher is not None:
+                payload = await self.fetcher.get_json(api_url)
+            else:
+                async with HttpFetcher() as fetcher:
+                    payload = await fetcher.get_json(api_url)
         except FetchError as exc:
             return self.result(
                 errors=[
@@ -101,7 +104,7 @@ class GreenhouseAdapter(BaseJobAdapter):
 
         return self.result(
             jobs=self.parse_payload(payload, company_name=company_name),
-            next_checkpoint=datetime.utcnow().isoformat(),
+            next_checkpoint=datetime.now(UTC).isoformat(),
         )
 
     def parse_payload(self, payload: dict[str, Any], *, company_name: str) -> list:

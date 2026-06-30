@@ -5,7 +5,7 @@ from __future__ import annotations
 from html.parser import HTMLParser
 from urllib.parse import urljoin
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from job_aggregator.app.adapters.base import (
     AdapterContext,
@@ -42,7 +42,7 @@ class HtmlNode:
         tag: str,
         attrs: dict[str, str] | None = None,
         *,
-        parent: "HtmlNode | None" = None,
+        parent: HtmlNode | None = None,
     ) -> None:
         self.tag = tag
         self.attrs = attrs or {}
@@ -70,13 +70,13 @@ class HtmlNode:
             return self.attrs.get("id") == selector[1:]
         return self.tag == selector
 
-    def find_all(self, selector: str) -> list["HtmlNode"]:
+    def find_all(self, selector: str) -> list[HtmlNode]:
         matches = [self] if self.matches(selector) else []
         for child in self.children:
             matches.extend(child.find_all(selector))
         return matches
 
-    def select_one(self, selector: str | None) -> "HtmlNode | None":
+    def select_one(self, selector: str | None) -> HtmlNode | None:
         if selector is None:
             return None
         matches = self.find_all(selector)
@@ -150,9 +150,12 @@ class CustomPageAdapter(BaseJobAdapter):
                 ]
             )
 
-        fetcher = self.fetcher or HttpFetcher()
         try:
-            html = await fetcher.get_text(config.listing_url)
+            if self.fetcher is not None:
+                html = await self.fetcher.get_text(config.listing_url)
+            else:
+                async with HttpFetcher() as fetcher:
+                    html = await fetcher.get_text(config.listing_url)
         except FetchError as exc:
             if not config.browser_fallback:
                 return self.result(
