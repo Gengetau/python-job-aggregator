@@ -1,0 +1,1 @@
+"""Browser fetcher placeholder."""
