@@ -15,7 +15,7 @@ and queryability rather than on a frontend shell.
 - Uses HTTP-first fetching with bounded retries and per-host rate limits
 - Provides Playwright browser fallback infrastructure for rendered pages
 - Normalizes raw postings into canonical job records
-- Tracks crawl runs, errors, checkpoints, and run summaries
+- Tracks crawl runs, per-adapter run state, errors, checkpoints, and summaries
 - Upserts repeat postings by source identity
 - Generates conservative canonical fingerprints and cross-source dedupe candidates
 - Exposes query endpoints through FastAPI and OpenAPI
@@ -155,17 +155,44 @@ Inspect run summaries:
 python -m job_aggregator.app.cli.main runs show
 ```
 
-Resume from the adapters and latest checkpoints associated with a previous run:
+Resume from the adapter state captured by a previous run:
 
 ```bash
 python -m job_aggregator.app.cli.main crawl resume --run-id 1
 ```
 
-Inspect cross-source dedupe candidates:
+Resume uses the adapter state captured by that specific run, including the
+adapter name, scope key, checkpoint before the run, and checkpoint after the run.
+It does not resume from whichever global checkpoint happens to be latest.
+
+Run a custom careers page crawl with default selectors:
 
 ```bash
-python -m job_aggregator.app.cli.main jobs dedupe
+python -m job_aggregator.app.cli.main crawl run \
+  --adapter custom_page \
+  --listing-url "https://example.com/careers" \
+  --company "Example Inc"
 ```
+
+Run a custom careers page crawl from a JSON config file:
+
+```bash
+python -m job_aggregator.app.cli.main crawl run \
+  --adapter custom_page \
+  --config-file custom-page.json
+```
+
+Inspect cross-source dedupe candidates for manual review:
+
+```bash
+python -m job_aggregator.app.cli.main jobs dedupe \
+  --limit 20 \
+  --scanned-limit 1000 \
+  --include-inactive
+```
+
+Dedupe candidates are read-only review groups. They include confidence and reason
+fields, but they are not automatic merge operations.
 
 Deactivate stale jobs:
 
@@ -218,7 +245,7 @@ Inspect sources and runs:
 curl http://127.0.0.1:8000/sources
 curl http://127.0.0.1:8000/runs
 curl http://127.0.0.1:8000/runs/1
-curl http://127.0.0.1:8000/dedupe/candidates
+curl "http://127.0.0.1:8000/dedupe/candidates?limit=20&include_inactive=true"
 ```
 
 More API examples are in [docs/api.md](docs/api.md).

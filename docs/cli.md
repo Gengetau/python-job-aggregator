@@ -31,18 +31,45 @@ Run a configured Greenhouse board:
 python -m job_aggregator.app.cli.main crawl run --adapter greenhouse --scope example --company "Example Inc"
 ```
 
-Resume from the adapter scope and latest checkpoints associated with a previous
-run:
+Resume from the adapter state captured by a previous run:
 
 ```bash
 python -m job_aggregator.app.cli.main crawl resume --run-id 1
 ```
 
+The resume command uses that run's stored `adapter_name`, `scope_key`, and
+`checkpoint_after` values. It does not pick the newest global checkpoint.
+
+Run a custom careers page with default selectors:
+
+```bash
+python -m job_aggregator.app.cli.main crawl run \
+  --adapter custom_page \
+  --listing-url "https://example.com/careers" \
+  --company "Example Inc"
+```
+
+Run a custom careers page from JSON config:
+
+```bash
+python -m job_aggregator.app.cli.main crawl run \
+  --adapter custom_page \
+  --config-file custom-page.json
+```
+
 Show conservative cross-source duplicate candidates:
 
 ```bash
-python -m job_aggregator.app.cli.main jobs dedupe
+python -m job_aggregator.app.cli.main jobs dedupe --limit 20 --scanned-limit 1000
 ```
+
+Include inactive jobs in the manual review set:
+
+```bash
+python -m job_aggregator.app.cli.main jobs dedupe --include-inactive
+```
+
+Candidate groups are for human review and are never merged automatically.
 
 Inspect recent runs:
 

@@ -35,8 +35,13 @@ Current adapters:
 4. Adapter errors are stored as `CrawlRunError` records.
 5. Raw jobs pass through normalization and dedupe.
 6. Jobs are upserted by `source_name + source_job_id`.
-7. Optional checkpoints are persisted per adapter scope.
-8. The run finishes as `success`, `partial_success`, or `failed`.
+7. Per-run adapter state records `adapter_name`, `scope_key`,
+   `checkpoint_before`, and `checkpoint_after`.
+8. Optional global checkpoints are persisted per adapter scope for new runs.
+9. The run finishes as `success`, `partial_success`, or `failed`.
+
+`crawl resume --run-id` resumes from the adapter state recorded for that specific
+run, not from the newest global checkpoint.
 
 ## Data Model
 
@@ -47,11 +52,13 @@ timestamps, active state, and raw hashes.
 Supporting tables:
 
 - `crawl_runs`
+- `crawl_run_adapter_states`
 - `crawl_run_errors`
 - `source_checkpoints`
 
-Schema changes are applied through Alembic migrations. Local tests can still use
-SQLAlchemy metadata initialization for fast in-memory databases.
+Schema changes are applied through Alembic migrations in CLI and application
+startup paths. Local tests can still explicitly use SQLAlchemy metadata
+initialization for fast in-memory databases.
 
 ## Deduplication Strategy
 
@@ -65,6 +72,9 @@ fuzzy matching because silent bad merges are worse than conservative duplicates.
 The operator-facing dedupe candidate query is read-only. It groups active jobs
 across distinct sources when normalized title, company, and location match, then
 returns a confidence score and reason for manual review.
+
+Including inactive jobs is opt-in for review workflows. Candidate groups are not
+automatic merge instructions and never mutate stored jobs.
 
 ## Testing Strategy
 
