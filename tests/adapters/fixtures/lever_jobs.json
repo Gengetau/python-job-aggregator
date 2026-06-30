@@ -1,0 +1,14 @@
+[
+  {
+    "id": "abc-123",
+    "text": "Data Platform Engineer",
+    "hostedUrl": "https://jobs.lever.co/example/abc-123",
+    "categories": {
+      "team": "Data",
+      "location": "New York, NY",
+      "commitment": "Full-time"
+    },
+    "descriptionPlain": "Work on data pipelines.",
+    "createdAt": 1780300800000
+  }
+]
