@@ -17,9 +17,10 @@ and queryability rather than on a frontend shell.
 - Normalizes raw postings into canonical job records
 - Tracks crawl runs, errors, checkpoints, and run summaries
 - Upserts repeat postings by source identity
-- Generates conservative canonical fingerprints for cross-source comparison
+- Generates conservative canonical fingerprints and cross-source dedupe candidates
 - Exposes query endpoints through FastAPI and OpenAPI
 - Provides local operator commands through Typer
+- Applies schema changes through Alembic migrations
 - Runs locally with SQLite, Docker, and fixture-backed tests
 
 ## Architecture
@@ -106,7 +107,7 @@ JOB_AGGREGATOR_PER_HOST_CONCURRENCY=2
 
 ## CLI Usage
 
-Initialize the local database:
+Apply database migrations:
 
 ```bash
 python -m job_aggregator.app.cli.main db init
@@ -122,6 +123,12 @@ Run a local demo crawl:
 
 ```bash
 python -m job_aggregator.app.cli.main crawl run
+```
+
+Run every locally configured CLI adapter. The default local set is `demo`:
+
+```bash
+python -m job_aggregator.app.cli.main crawl run --all
 ```
 
 Run a Greenhouse board crawl:
@@ -148,7 +155,13 @@ Inspect run summaries:
 python -m job_aggregator.app.cli.main runs show
 ```
 
-Inspect dedupe status:
+Resume from the adapters and latest checkpoints associated with a previous run:
+
+```bash
+python -m job_aggregator.app.cli.main crawl resume --run-id 1
+```
+
+Inspect cross-source dedupe candidates:
 
 ```bash
 python -m job_aggregator.app.cli.main jobs dedupe
@@ -178,6 +191,14 @@ curl -X POST http://127.0.0.1:8000/admin/crawl \
   -d "{\"adapters\":[\"demo\"]}"
 ```
 
+Trigger a configured Greenhouse crawl:
+
+```bash
+curl -X POST http://127.0.0.1:8000/admin/crawl \
+  -H "Content-Type: application/json" \
+  -d "{\"adapters\":[\"greenhouse\"],\"options\":{\"greenhouse\":{\"board_token\":\"example\",\"company_name\":\"Example Inc\"}}}"
+```
+
 List jobs:
 
 ```bash
@@ -197,6 +218,7 @@ Inspect sources and runs:
 curl http://127.0.0.1:8000/sources
 curl http://127.0.0.1:8000/runs
 curl http://127.0.0.1:8000/runs/1
+curl http://127.0.0.1:8000/dedupe/candidates
 ```
 
 More API examples are in [docs/api.md](docs/api.md).
@@ -217,7 +239,10 @@ local `data/` directory.
 Run the full default test suite:
 
 ```bash
+python -m ruff check .
+python -m ruff format --check .
 python -m pytest
+python -m pytest --cov --cov-report=term-missing
 ```
 
 The default tests avoid live websites. Adapter behavior is verified with stored

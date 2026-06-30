@@ -20,7 +20,16 @@ curl "http://localhost:8000/jobs?q=python&page=1&page_size=10"
 curl "http://localhost:8000/jobs?location_type=remote&employment_type=full_time"
 curl http://localhost:8000/sources
 curl http://localhost:8000/runs
+curl http://localhost:8000/dedupe/candidates
 curl -X POST http://localhost:8000/admin/crawl -H "Content-Type: application/json" -d "{\"adapters\":[\"demo\"]}"
+```
+
+Admin crawl requests can pass adapter-specific options:
+
+```bash
+curl -X POST http://localhost:8000/admin/crawl \
+  -H "Content-Type: application/json" \
+  -d "{\"adapters\":[\"lever\"],\"options\":{\"lever\":{\"company_slug\":\"example\",\"company_name\":\"Example Inc\"}}}"
 ```
 
 OpenAPI docs are generated automatically at:

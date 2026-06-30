@@ -50,6 +50,9 @@ Supporting tables:
 - `crawl_run_errors`
 - `source_checkpoints`
 
+Schema changes are applied through Alembic migrations. Local tests can still use
+SQLAlchemy metadata initialization for fast in-memory databases.
+
 ## Deduplication Strategy
 
 Hard identity is `source_name + source_job_id`. This updates the same posting
@@ -58,6 +61,10 @@ across repeated crawls.
 Soft identity is represented by `canonical_fingerprint`, generated from
 normalized title, company, location, and source URL family. v1 avoids aggressive
 fuzzy matching because silent bad merges are worse than conservative duplicates.
+
+The operator-facing dedupe candidate query is read-only. It groups active jobs
+across distinct sources when normalized title, company, and location match, then
+returns a confidence score and reason for manual review.
 
 ## Testing Strategy
 
