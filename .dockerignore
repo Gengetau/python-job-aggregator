@@ -1,0 +1,13 @@
+.git/
+.venv/
+.codex-deps/
+.codex-tmp/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+pytest-cache-files-*/
+data/
+logs/
+dist/
+build/
+*.egg-info/

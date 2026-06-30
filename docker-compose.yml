@@ -1,0 +1,13 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      JOB_AGGREGATOR_ENV: local
+      JOB_AGGREGATOR_LOG_LEVEL: INFO
+      JOB_AGGREGATOR_DATABASE_URL: sqlite:///./data/job_aggregator.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data

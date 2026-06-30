@@ -14,6 +14,8 @@ htmlcov/
 # Virtual environments
 .venv/
 venv/
+.codex-deps/
+.codex-tmp/
 
 # Build artifacts
 build/
@@ -31,6 +33,7 @@ logs/
 # Test and browser artifacts
 playwright-report/
 test-results/
+pytest-cache-files-*/
 
 # Editors and OS files
 .idea/
