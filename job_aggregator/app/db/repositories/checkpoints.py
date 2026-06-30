@@ -23,6 +23,17 @@ class CheckpointsRepository:
         )
         return self.session.scalar(statement)
 
+    def latest_for_adapter(self, adapter_name: str) -> SourceCheckpoint | None:
+        """Return the most recently updated checkpoint for an adapter."""
+
+        statement = (
+            select(SourceCheckpoint)
+            .where(SourceCheckpoint.adapter_name == adapter_name)
+            .order_by(SourceCheckpoint.updated_at.desc(), SourceCheckpoint.id.desc())
+            .limit(1)
+        )
+        return self.session.scalar(statement)
+
     def upsert(
         self,
         *,

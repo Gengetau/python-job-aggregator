@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CrawlRunErrorResponse(BaseModel):
@@ -37,11 +38,12 @@ class CrawlRunResponse(BaseModel):
 
 
 class CrawlRunDetail(CrawlRunResponse):
-    errors: list[CrawlRunErrorResponse] = []
+    errors: list[CrawlRunErrorResponse] = Field(default_factory=list)
 
 
 class CrawlRequest(BaseModel):
     adapters: list[str] | None = None
+    options: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class CrawlResponse(BaseModel):

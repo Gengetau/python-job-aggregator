@@ -2,14 +2,57 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from job_aggregator.app.db.models import Job
+
+
+@dataclass(frozen=True, slots=True)
+class DedupeCandidateJob:
+    """Stored job summary included in a duplicate candidate group."""
+
+    id: int
+    source_name: str
+    source_job_id: str
+    source_url: str
+    title: str
+    company_name: str
+    location_text: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class DedupeCandidateGroup:
+    """Conservative cross-source duplicate candidate group."""
+
+    fingerprint: str
+    confidence: float
+    reason: str
+    jobs: list[DedupeCandidateJob]
+
+
+def _candidate_part(value: str | None) -> str:
+    return re.sub(r"\s+", " ", value or "").strip().lower()
+
+
+def _candidate_key(job: Job) -> tuple[str, str, str] | None:
+    title = _candidate_part(job.title)
+    company_name = _candidate_part(job.company_name)
+    location_text = _candidate_part(job.location_text)
+    if not title or not company_name:
+        return None
+    return title, company_name, location_text
+
+
+def _candidate_fingerprint(key: tuple[str, str, str]) -> str:
+    return hashlib.sha256("|".join(key).encode("utf-8")).hexdigest()
 
 
 class JobsRepository:
@@ -138,7 +181,7 @@ class JobsRepository:
         source_name = str(values["source_name"])
         source_job_id = str(values["source_job_id"])
         existing = self.get_by_source_identity(source_name, source_job_id)
-        now = values.get("last_seen_at") or datetime.now(timezone.utc)
+        now = values.get("last_seen_at") or datetime.now(UTC)
 
         if existing is None:
             create_values = dict(values)
@@ -176,6 +219,70 @@ class JobsRepository:
             job.is_active = False
         self.session.flush()
         return len(jobs)
+
+    def duplicate_candidates(
+        self,
+        *,
+        limit: int = 50,
+        scanned_limit: int = 1000,
+        active_only: bool = True,
+    ) -> list[DedupeCandidateGroup]:
+        """Return conservative cross-source duplicate candidates.
+
+        The stored canonical fingerprint intentionally includes URL family, so this
+        query uses a narrower operator review key that ignores source URL family and
+        only groups exact normalized title, company, and location matches.
+        """
+
+        statement = select(Job)
+        if active_only:
+            statement = statement.where(Job.is_active.is_(True))
+        statement = statement.order_by(Job.company_name.asc(), Job.title.asc(), Job.id.asc()).limit(
+            scanned_limit
+        )
+
+        grouped: dict[tuple[str, str, str], list[Job]] = {}
+        for job in self.session.scalars(statement):
+            key = _candidate_key(job)
+            if key is None:
+                continue
+            grouped.setdefault(key, []).append(job)
+
+        candidates: list[DedupeCandidateGroup] = []
+        for key, jobs in grouped.items():
+            if len(jobs) < 2 or len({job.source_name for job in jobs}) < 2:
+                continue
+
+            sorted_jobs = sorted(jobs, key=lambda job: (job.source_name, job.source_job_id, job.id))
+            has_location = bool(key[2])
+            candidates.append(
+                DedupeCandidateGroup(
+                    fingerprint=_candidate_fingerprint(key),
+                    confidence=0.95 if has_location else 0.85,
+                    reason=(
+                        "same normalized title, company, and location across multiple sources"
+                        if has_location
+                        else "same normalized title and company across multiple sources"
+                    ),
+                    jobs=[
+                        DedupeCandidateJob(
+                            id=job.id,
+                            source_name=job.source_name,
+                            source_job_id=job.source_job_id,
+                            source_url=job.source_url,
+                            title=job.title,
+                            company_name=job.company_name,
+                            location_text=job.location_text,
+                        )
+                        for job in sorted_jobs
+                    ],
+                )
+            )
+
+        return sorted(
+            candidates,
+            key=lambda group: (-group.confidence, group.jobs[0].company_name, group.jobs[0].title),
+        )[:limit]
 
     def sources(self) -> list[dict[str, object]]:
         """Return lightweight source summaries."""

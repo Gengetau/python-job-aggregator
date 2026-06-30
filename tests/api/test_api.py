@@ -5,7 +5,29 @@ from job_aggregator.app.adapters.demo import DemoAdapter
 from job_aggregator.app.api.app import create_app
 from job_aggregator.app.core.config import get_settings
 from job_aggregator.app.db.models import Base
+from job_aggregator.app.db.repositories.jobs import JobsRepository
 from job_aggregator.app.db.session import create_session_factory, make_engine
+from tests.adapters.fakes import FakeJobAdapter
+
+
+def job_values(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "canonical_fingerprint": "acme-software-engineer-remote",
+        "source_name": "greenhouse",
+        "source_job_id": "job-123",
+        "source_url": "https://example.com/jobs/123",
+        "title": "Software Engineer",
+        "company_name": "Acme",
+        "team_name": "Engineering",
+        "location_text": "Remote",
+        "location_type": "remote",
+        "employment_type": "full_time",
+        "description_text": "Build useful systems.",
+        "tags_json": '["python"]',
+        "raw_hash": "hash-v1",
+    }
+    values.update(overrides)
+    return values
 
 
 @pytest.fixture()
@@ -33,7 +55,9 @@ def test_openapi_schema_is_generated(client: TestClient) -> None:
     assert "/jobs" in response.json()["paths"]
 
 
-def test_create_app_initializes_configured_in_memory_database(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_app_initializes_configured_in_memory_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("JOB_AGGREGATOR_DATABASE_URL", "sqlite:///:memory:")
     get_settings.cache_clear()
     app = create_app(adapters=[DemoAdapter()])
@@ -72,6 +96,66 @@ def test_admin_crawl_populates_jobs_and_runs(client: TestClient) -> None:
 
     run_id = crawl_response.json()["run_id"]
     assert client.get(f"/runs/{run_id}").status_code == 200
+
+
+def test_admin_crawl_passes_adapter_options_to_context() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    adapter = FakeJobAdapter()
+    app = create_app(
+        session_factory=create_session_factory(engine),
+        adapters=[adapter],
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/admin/crawl",
+        json={
+            "adapters": ["fake"],
+            "options": {
+                "fake": {
+                    "scope_key": "board-a",
+                    "company_name": "Acme",
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert adapter.seen_context is not None
+    assert adapter.seen_context.scope_key == "board-a"
+    assert adapter.seen_context.options == {"company_name": "Acme"}
+
+
+def test_dedupe_candidates_endpoint_returns_cross_source_groups() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    session_factory = create_session_factory(engine)
+    with session_factory() as session:
+        repository = JobsRepository(session)
+        repository.create(**job_values())
+        repository.create(
+            **job_values(
+                source_name="lever",
+                source_job_id="job-456",
+                source_url="https://lever.example.com/jobs/456",
+                raw_hash="hash-v2",
+            )
+        )
+        session.commit()
+    app = create_app(
+        session_factory=session_factory,
+        adapters=[DemoAdapter()],
+    )
+    client = TestClient(app)
+
+    response = client.get("/dedupe/candidates")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["confidence"] == 0.95
+    assert {job["source_name"] for job in payload[0]["jobs"]} == {"greenhouse", "lever"}
 
 
 def test_jobs_filters_and_pagination(client: TestClient) -> None:

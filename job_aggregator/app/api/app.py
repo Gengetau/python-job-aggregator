@@ -8,10 +8,13 @@ from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
 from job_aggregator.app.adapters.base import BaseJobAdapter
+from job_aggregator.app.adapters.custom_page import CustomPageAdapter
 from job_aggregator.app.adapters.demo import DemoAdapter
-from job_aggregator.app.api.routes import admin, health, jobs, runs, sources
+from job_aggregator.app.adapters.greenhouse import GreenhouseAdapter
+from job_aggregator.app.adapters.lever import LeverAdapter
+from job_aggregator.app.api.routes import admin, dedupe, health, jobs, runs, sources
 from job_aggregator.app.core.config import get_settings
-from job_aggregator.app.db.session import create_session_factory, init_database, make_engine
+from job_aggregator.app.db.session import create_session_factory, init_database
 
 
 def create_app(
@@ -33,10 +36,15 @@ def create_app(
         session_factory = create_session_factory(engine)
 
     app.state.session_factory = session_factory
-    app.state.adapters = list(adapters) if adapters is not None else [DemoAdapter()]
+    app.state.adapters = (
+        list(adapters)
+        if adapters is not None
+        else [DemoAdapter(), GreenhouseAdapter(), LeverAdapter(), CustomPageAdapter()]
+    )
 
     app.include_router(health.router)
     app.include_router(jobs.router)
+    app.include_router(dedupe.router)
     app.include_router(sources.router)
     app.include_router(runs.router)
     app.include_router(admin.router)

@@ -3,19 +3,27 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 
 import typer
 
 from job_aggregator import __version__
-from job_aggregator.app.adapters import DemoAdapter, GreenhouseAdapter, LeverAdapter
-from job_aggregator.app.adapters.base import BaseJobAdapter
-from job_aggregator.app.crawler.collector import Collector
+from job_aggregator.app.adapters import (
+    CustomPageAdapter,
+    DemoAdapter,
+    GreenhouseAdapter,
+    LeverAdapter,
+)
+from job_aggregator.app.adapters.base import AdapterContext, BaseJobAdapter
 from job_aggregator.app.core.config import get_settings
 from job_aggregator.app.core.logging import configure_logging
+from job_aggregator.app.crawler.collector import Collector
+from job_aggregator.app.crawler.contexts import context_from_options
+from job_aggregator.app.db.repositories.checkpoints import CheckpointsRepository
 from job_aggregator.app.db.repositories.jobs import JobsRepository
 from job_aggregator.app.db.repositories.runs import RunsRepository
-from job_aggregator.app.db.session import create_session_factory, init_database
+from job_aggregator.app.db.session import create_session_factory, init_database, upgrade_database
 
 app = typer.Typer(help="Operate the Python Job Aggregator service.")
 db_app = typer.Typer(help="Manage local database schema.")
@@ -26,6 +34,8 @@ app.add_typer(db_app, name="db")
 app.add_typer(crawl_app, name="crawl")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(runs_app, name="runs")
+
+LOCAL_ALL_ADAPTER_NAMES = ("demo",)
 
 
 @app.callback()
@@ -61,18 +71,66 @@ def _session_factory(database_url: str | None = None):
     return create_session_factory(engine), resolved_url
 
 
-def _adapter_for(
-    adapter_name: str | None,
+def _adapter_for(adapter_name: str | None) -> BaseJobAdapter:
+    name = (adapter_name or "demo").lower()
+    if name == "demo":
+        return DemoAdapter()
+    if name == "greenhouse":
+        return GreenhouseAdapter()
+    if name == "lever":
+        return LeverAdapter()
+    if name == "custom_page":
+        return CustomPageAdapter()
+    raise typer.BadParameter(f"Unknown adapter: {adapter_name}")
+
+
+def _adapter_names_from_scope(adapter_scope: str) -> list[str]:
+    return [
+        adapter_name.strip()
+        for adapter_name in adapter_scope.split(",")
+        if adapter_name.strip() and adapter_name.strip() != "none"
+    ]
+
+
+def _cli_context(
+    adapter_name: str,
     *,
     scope: str | None,
     company: str | None,
     api_url: str | None,
-) -> BaseJobAdapter:
-    if adapter_name == "greenhouse":
-        return GreenhouseAdapter(board_token=scope, company_name=company, api_url=api_url)
-    if adapter_name == "lever":
-        return LeverAdapter(company_slug=scope, company_name=company, api_url=api_url)
-    return DemoAdapter()
+) -> AdapterContext | None:
+    options: dict[str, str] = {}
+    if scope:
+        if adapter_name == "greenhouse":
+            options["board_token"] = scope
+        elif adapter_name == "lever":
+            options["company_slug"] = scope
+        else:
+            options["scope_key"] = scope
+    if company:
+        options["company_name"] = company
+    if api_url:
+        options["api_url"] = api_url
+    return context_from_options(options) if options else None
+
+
+def _resume_contexts(
+    adapter_names: list[str],
+    database_url: str | None,
+) -> dict[str, AdapterContext]:
+    session_factory, _resolved_url = _session_factory(database_url)
+    contexts: dict[str, AdapterContext] = {}
+    with session_factory() as session:
+        checkpoints = CheckpointsRepository(session)
+        for adapter_name in adapter_names:
+            checkpoint = checkpoints.latest_for_adapter(adapter_name)
+            if checkpoint is not None:
+                contexts[adapter_name] = AdapterContext(scope_key=checkpoint.scope_key)
+    return contexts
+
+
+def _format_adapter_names(adapters: list[BaseJobAdapter]) -> str:
+    return ",".join(adapter.name for adapter in adapters) or "none"
 
 
 async def _run_collector(
@@ -80,12 +138,15 @@ async def _run_collector(
     adapters: list[BaseJobAdapter],
     database_url: str | None = None,
     trigger_type: str = "manual",
+    contexts: Mapping[str, AdapterContext] | None = None,
 ) -> None:
     session_factory, resolved_url = _session_factory(database_url)
     result = await Collector(adapters=adapters, session_factory=session_factory).run(
-        trigger_type=trigger_type
+        trigger_type=trigger_type,
+        contexts=contexts,
     )
     typer.echo(f"database_url={resolved_url}")
+    typer.echo(f"running_adapters={_format_adapter_names(adapters)}")
     typer.echo(f"run_id={result.run_id}")
     typer.echo(f"status={result.status}")
     typer.echo(f"jobs_seen={result.jobs_seen}")
@@ -102,12 +163,12 @@ def init_db(
         help="Override JOB_AGGREGATOR_DATABASE_URL for this command.",
     ),
 ) -> None:
-    """Create database tables for local development."""
+    """Apply database migrations for local development."""
 
     settings = get_settings()
     resolved_url = database_url or settings.database_url
-    init_database(resolved_url)
-    typer.echo(f"initialized database: {resolved_url}")
+    upgrade_database(resolved_url)
+    typer.echo(f"applied migrations: {resolved_url}")
 
 
 @db_app.command("seed-demo")
@@ -139,7 +200,7 @@ def crawl_run(
     all_adapters: bool = typer.Option(
         False,
         "--all",
-        help="Run the local demo adapter set.",
+        help="Run all locally configured adapters. This is demo by default.",
     ),
     scope: str | None = typer.Option(
         None,
@@ -160,23 +221,60 @@ def crawl_run(
 ) -> None:
     """Run a crawl."""
 
-    adapters = [DemoAdapter()] if all_adapters else [_adapter_for(adapter, scope=scope, company=company, api_url=api_url)]
-    asyncio.run(_run_collector(adapters=adapters, database_url=database_url))
+    adapter_names = list(LOCAL_ALL_ADAPTER_NAMES) if all_adapters else [adapter or "demo"]
+    adapters = [_adapter_for(adapter_name) for adapter_name in adapter_names]
+    contexts: dict[str, AdapterContext] = {}
+    for adapter_instance in adapters:
+        context = _cli_context(
+            adapter_instance.name,
+            scope=scope,
+            company=company,
+            api_url=api_url,
+        )
+        if context is not None:
+            contexts[adapter_instance.name] = context
+    asyncio.run(
+        _run_collector(
+            adapters=adapters,
+            database_url=database_url,
+            contexts=contexts,
+        )
+    )
 
 
 @crawl_app.command("resume")
 def crawl_resume(
-    run_id: int = typer.Option(..., "--run-id", help="Run id whose checkpoint context should be resumed."),
+    run_id: int = typer.Option(
+        ...,
+        "--run-id",
+        help="Run id whose checkpoint context should be resumed.",
+    ),
     database_url: str | None = typer.Option(None, "--database-url"),
 ) -> None:
-    """Resume from stored checkpoints using the local demo adapter set."""
+    """Resume from stored checkpoints using the adapters from a previous run."""
 
+    session_factory, _resolved_url = _session_factory(database_url)
+    with session_factory() as session:
+        run = RunsRepository(session).get(run_id)
+        if run is None:
+            raise typer.BadParameter(f"No crawl run found for run_id={run_id}")
+        adapter_names = _adapter_names_from_scope(run.adapter_scope)
+
+    if not adapter_names:
+        raise typer.BadParameter(f"Run {run_id} has no adapter scope to resume.")
+
+    adapters = [_adapter_for(adapter_name) for adapter_name in adapter_names]
+    contexts = _resume_contexts(adapter_names, database_url)
     typer.echo(f"resuming_from_run_id={run_id}")
+    typer.echo(f"resuming_adapters={_format_adapter_names(adapters)}")
+    for adapter_name, context in contexts.items():
+        typer.echo(f"resume_context adapter={adapter_name} scope_key={context.scope_key}")
     asyncio.run(
         _run_collector(
-            adapters=[DemoAdapter()],
+            adapters=adapters,
             database_url=database_url,
             trigger_type="manual",
+            contexts=contexts,
         )
     )
 
@@ -185,13 +283,25 @@ def crawl_resume(
 def jobs_dedupe(
     database_url: str | None = typer.Option(None, "--database-url"),
 ) -> None:
-    """Show conservative dedupe state."""
+    """Show conservative cross-source dedupe candidates."""
 
     session_factory, _resolved_url = _session_factory(database_url)
     with session_factory() as session:
         repository = JobsRepository(session)
+        candidates = repository.duplicate_candidates()
         typer.echo(f"jobs_total={repository.count()}")
-        typer.echo("dedupe_strategy=source_name+source_job_id with canonical fingerprints")
+        typer.echo(f"candidate_groups={len(candidates)}")
+        for index, candidate in enumerate(candidates, start=1):
+            typer.echo(
+                f"group={index} fingerprint={candidate.fingerprint} "
+                f"confidence={candidate.confidence:.2f} reason={candidate.reason}"
+            )
+            for job in candidate.jobs:
+                typer.echo(
+                    f"  job_id={job.id} source={job.source_name} "
+                    f"source_job_id={job.source_job_id} title={job.title!r} "
+                    f"company={job.company_name!r}"
+                )
 
 
 @jobs_app.command("deactivate-stale")
@@ -203,7 +313,7 @@ def jobs_deactivate_stale(
     """Deactivate jobs not seen within a window."""
 
     session_factory, _resolved_url = _session_factory(database_url)
-    threshold = datetime.now(timezone.utc) - timedelta(days=days)
+    threshold = datetime.now(UTC) - timedelta(days=days)
     with session_factory() as session:
         count = JobsRepository(session).deactivate_stale(source_name=source, seen_before=threshold)
         session.commit()

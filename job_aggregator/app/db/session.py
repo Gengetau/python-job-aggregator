@@ -15,6 +15,10 @@ from job_aggregator.app.core.config import get_settings
 from job_aggregator.app.db.models import Base
 
 
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
 def _ensure_sqlite_parent(database_url: str) -> None:
     """Create the parent directory for file-backed SQLite URLs."""
 
@@ -22,6 +26,8 @@ def _ensure_sqlite_parent(database_url: str) -> None:
     if not url.drivername.startswith("sqlite"):
         return
     if not url.database or url.database == ":memory:":
+        return
+    if url.query.get("mode") == "memory" or url.database.startswith("file:"):
         return
 
     database_path = Path(url.database)
@@ -76,6 +82,19 @@ def init_database(database_url: str | None = None, *, echo: bool = False) -> Eng
     engine = make_engine(database_url, echo=echo)
     Base.metadata.create_all(bind=engine)
     return engine
+
+
+def upgrade_database(database_url: str | None = None) -> None:
+    """Apply Alembic migrations through the latest revision."""
+
+    from alembic import command
+    from alembic.config import Config
+
+    resolved_url = database_url or get_settings().database_url
+    _ensure_sqlite_parent(resolved_url)
+    config = Config(str(_project_root() / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", resolved_url)
+    command.upgrade(config, "head")
 
 
 def get_session(database_url: str | None = None) -> Iterator[Session]:
