@@ -1,5 +1,7 @@
 # Python Job Aggregator
 
+[![CI](https://github.com/Gengetau/python-job-aggregator/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Gengetau/python-job-aggregator/actions/workflows/ci.yml)
+
 Python Job Aggregator is a backend service for collecting job postings from
 multiple hiring sources, normalizing them into canonical records, deduplicating
 repeat listings, and exposing the data through an operator CLI and FastAPI API.
