@@ -6,11 +6,22 @@ The project is intentionally backend-focused. It is designed to show a productio
 
 ## Current Status
 
-This repository is in the foundation stage. The initial scaffold defines the package layout, configuration, logging, CLI placeholder, and test setup. Subsequent loops will add storage, adapters, fetchers, normalization, deduplication, the collector, and API routes.
+This repository implements the full v1 showcase path:
 
-## Planned Capabilities
+- shared adapter contract and source adapters
+- HTTP fetcher infrastructure with bounded retries and host-level rate limits
+- Playwright browser fallback wrapper
+- deterministic normalization and conservative deduplication
+- SQLite persistence for jobs, crawl runs, crawl errors, and checkpoints
+- collector orchestration with adapter failure isolation
+- Typer CLI commands for local operations
+- FastAPI query/admin API
+- fixture-based tests that avoid live websites
+- Docker, compose, Makefile, and documentation
 
-- Adapter-driven job collection for sources such as Greenhouse, Lever, and configurable careers pages
+## Capabilities
+
+- Adapter-driven job collection for Greenhouse, Lever, configurable careers pages, and deterministic demo data
 - HTTP-first fetching with Playwright browser fallback infrastructure
 - Deterministic normalization and conservative deduplication
 - SQLite persistence with SQLAlchemy and Alembic migration support
@@ -39,6 +50,9 @@ python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -e ".[dev]"
 python -m pytest
+python -m job_aggregator.app.cli.main db init
+python -m job_aggregator.app.cli.main db seed-demo
+uvicorn job_aggregator.app.api.app:create_app --factory --reload
 ```
 
 On macOS or Linux, activate the virtual environment with:
@@ -61,6 +75,7 @@ job_aggregator/
     fetchers/
     pipeline/
     db/
+      migrations/
       repositories/
     services/
     cli/
@@ -88,6 +103,87 @@ The same design material is also kept under:
 - Avoid live websites in default tests; use fixtures for adapter behavior.
 - Treat browser automation as a fallback for rendering support, not as the default path.
 
-## Next Step
+## Architecture
 
-Continue with Loop 2: build the database foundation for canonical jobs, crawl runs, crawl errors, and source checkpoints.
+```mermaid
+flowchart LR
+  CLI["Typer CLI"] --> Collector
+  API["FastAPI API"] --> Collector
+  Collector --> Adapters
+  Adapters --> Fetchers
+  Fetchers --> Sources["Greenhouse / Lever / Custom pages"]
+  Collector --> Pipeline["Normalize + dedupe"]
+  Pipeline --> DB["SQLite / SQLAlchemy"]
+  API --> DB
+```
+
+See [docs/architecture.md](docs/architecture.md) for adapter design, crawl
+lifecycle, data model, dedupe strategy, testing strategy, and scraping
+guardrails.
+
+## Adapter Contract
+
+All source adapters inherit from `BaseJobAdapter` and return an `AdapterResult`.
+The result carries `RawJobPosting` records plus recoverable `AdapterError` entries
+so a future collector can isolate source failures without crashing the whole run.
+
+Adapters also declare static metadata:
+
+- `name`
+- `fetch_mode`: `http`, `browser`, or `hybrid`
+- `source_scope`: the source-specific unit the adapter knows how to crawl
+
+The current Greenhouse, Lever, and custom page modules expose adapters with
+this shared interface and fixture-tested parsers. `DemoAdapter` provides a
+network-free local source for reviewer setup and API/CLI demos.
+
+## Database
+
+The v1 local database is SQLite, configured through `JOB_AGGREGATOR_DATABASE_URL`.
+By default it writes to `./data/job_aggregator.db`.
+
+Initialize the schema with:
+
+```bash
+job-aggregator db init
+```
+
+For one-off testing, the CLI also accepts an explicit URL:
+
+```bash
+python -m job_aggregator.app.cli.main db init --database-url sqlite:///:memory:
+```
+
+## CLI
+
+```bash
+python -m job_aggregator.app.cli.main crawl run
+python -m job_aggregator.app.cli.main crawl run --adapter greenhouse --scope example --company "Example Inc"
+python -m job_aggregator.app.cli.main jobs dedupe
+python -m job_aggregator.app.cli.main jobs deactivate-stale --days 30
+python -m job_aggregator.app.cli.main runs show
+```
+
+See [docs/cli.md](docs/cli.md) for more examples.
+
+## API
+
+```bash
+curl http://localhost:8000/health
+curl "http://localhost:8000/jobs?q=python&page=1&page_size=10"
+curl http://localhost:8000/sources
+curl http://localhost:8000/runs
+curl -X POST http://localhost:8000/admin/crawl -H "Content-Type: application/json" -d "{\"adapters\":[\"demo\"]}"
+```
+
+OpenAPI docs are available at `/docs` when the API is running.
+
+See [docs/api.md](docs/api.md) for endpoint examples.
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+The API listens on `http://localhost:8000` and stores SQLite data under `./data`.
