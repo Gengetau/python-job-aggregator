@@ -8,6 +8,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .coverage
+coverage.xml
 htmlcov/
 
 # Virtual environments
@@ -21,8 +22,15 @@ dist/
 
 # Local runtime data
 .env
+.env.*
 data/
 logs/
+*.sqlite3
+*.db
+
+# Test and browser artifacts
+playwright-report/
+test-results/
 
 # Editors and OS files
 .idea/

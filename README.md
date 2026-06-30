@@ -17,6 +17,20 @@ This repository is in the foundation stage. The initial scaffold defines the pac
 - Crawl run tracking, checkpointing, and recoverable error records
 - FastAPI query endpoints for jobs, sources, and crawl runs
 - Typer CLI commands for local operators
+- Dockerized local development flow
+
+## Planned Stack
+
+- Python 3.12+
+- FastAPI
+- SQLAlchemy 2.x
+- Alembic
+- SQLite for local persistence
+- httpx
+- Playwright
+- Pydantic and pydantic-settings
+- Typer and Rich
+- pytest and pytest-asyncio
 
 ## Quick Start
 
@@ -39,12 +53,15 @@ source .venv/bin/activate
 job_aggregator/
   app/
     api/
+      routes/
+      schemas/
     core/
     crawler/
     adapters/
     fetchers/
     pipeline/
     db/
+      repositories/
     services/
     cli/
 tests/
@@ -55,9 +72,13 @@ docker/
 
 ## Design Source
 
-The product and architecture source of truth is:
+The product and architecture source of truth for the current engineering loop is:
 
 - `2026-06-30-python-job-aggregator-design.md`
+
+The same design material is also kept under:
+
+- `docs/specs/2026-06-30-python-job-aggregator-design.md`
 
 ## Development Principles
 
@@ -66,3 +87,7 @@ The product and architecture source of truth is:
 - Store normalized canonical jobs, not only raw scraped blobs.
 - Avoid live websites in default tests; use fixtures for adapter behavior.
 - Treat browser automation as a fallback for rendering support, not as the default path.
+
+## Next Step
+
+Continue with Loop 2: build the database foundation for canonical jobs, crawl runs, crawl errors, and source checkpoints.
