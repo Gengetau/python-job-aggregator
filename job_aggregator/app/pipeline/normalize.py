@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlparse
@@ -212,7 +212,7 @@ def normalize_job(raw: RawJobPosting) -> CanonicalJobData:
     employment_type = classify_employment_type(raw.employment_type_text)
     salary_min, salary_max, salary_currency = parse_salary(raw.salary_text)
     tags = extract_tags(raw)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     raw_payload = raw.model_dump(mode="json")
     return CanonicalJobData(

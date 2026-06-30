@@ -1,5 +1,4 @@
 """Fetch infrastructure package."""
-"""Fetch infrastructure exports."""
 
 from job_aggregator.app.fetchers.browser import BrowserFetcher, BrowserFetchError
 from job_aggregator.app.fetchers.http import FetchError, FetchResponse, HttpFetcher

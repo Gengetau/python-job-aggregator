@@ -61,15 +61,13 @@ class HttpFetcher:
     ) -> None:
         settings = get_settings()
         self.timeout_seconds = timeout_seconds or settings.http_timeout_seconds
-        self.max_retries = (
-            settings.http_max_retries if max_retries is None else max_retries
-        )
+        self.max_retries = settings.http_max_retries if max_retries is None else max_retries
         self.backoff_seconds = backoff_seconds or settings.http_backoff_seconds
         self.rate_limiter = rate_limiter or HostRateLimiter(settings.per_host_concurrency)
         self._client = client
         self._owns_client = client is None
 
-    async def __aenter__(self) -> "HttpFetcher":
+    async def __aenter__(self) -> HttpFetcher:
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=self.timeout_seconds)
             self._owns_client = True
@@ -108,7 +106,7 @@ class HttpFetcher:
                     text=response.text,
                     headers=dict(response.headers),
                 )
-            except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+            except (TimeoutError, httpx.HTTPError) as exc:
                 last_error = exc
                 if attempt == attempts_allowed:
                     break

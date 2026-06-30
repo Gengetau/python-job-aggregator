@@ -1,5 +1,4 @@
 """Normalization and deduplication pipeline package."""
-"""Pipeline exports."""
 
 from job_aggregator.app.pipeline.dedupe import (
     deactivate_stale_jobs,

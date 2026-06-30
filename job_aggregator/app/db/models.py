@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -23,7 +23,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 def utc_now() -> datetime:
     """Return the current UTC timestamp."""
 
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):
@@ -120,7 +120,7 @@ class CrawlRun(Base):
     jobs_deactivated: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     errors_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
-    errors: Mapped[list["CrawlRunError"]] = relationship(
+    errors: Mapped[list[CrawlRunError]] = relationship(
         back_populates="run",
         cascade="all, delete-orphan",
     )

@@ -75,7 +75,10 @@ class Collector:
             }
 
             for adapter in selected:
-                logger.info("starting adapter crawl", extra={"adapter": adapter.name, "run_id": run.id})
+                logger.info(
+                    "starting adapter crawl",
+                    extra={"adapter": adapter.name, "run_id": run.id},
+                )
                 base_context = contexts.get(adapter.name) if contexts else None
                 adapter_context = context_with_checkpoint(adapter, checkpoints, base_context)
                 try:

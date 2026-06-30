@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, ClassVar
 
@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 def utc_now() -> datetime:
     """Return the current UTC timestamp."""
 
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class AdapterFetchMode(StrEnum):

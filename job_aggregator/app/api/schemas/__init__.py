@@ -1,5 +1,4 @@
 """API schema modules."""
-"""API schema exports."""
 
 from job_aggregator.app.api.schemas.jobs import JobResponse, JobsPage
 from job_aggregator.app.api.schemas.runs import (

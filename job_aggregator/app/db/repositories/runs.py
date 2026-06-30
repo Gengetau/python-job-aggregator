@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -63,7 +63,7 @@ class RunsRepository:
         """Mark a run as finished with summary counters."""
 
         run.status = status
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = datetime.now(UTC)
         run.jobs_seen = jobs_seen
         run.jobs_created = jobs_created
         run.jobs_updated = jobs_updated
