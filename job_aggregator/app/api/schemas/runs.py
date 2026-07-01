@@ -21,6 +21,19 @@ class CrawlRunErrorResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CrawlRunAdapterStateResponse(BaseModel):
+    id: int
+    run_id: int
+    adapter_name: str
+    scope_key: str
+    checkpoint_before: str | None
+    checkpoint_after: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class CrawlRunResponse(BaseModel):
     id: int
     started_at: datetime
@@ -39,6 +52,7 @@ class CrawlRunResponse(BaseModel):
 
 class CrawlRunDetail(CrawlRunResponse):
     errors: list[CrawlRunErrorResponse] = Field(default_factory=list)
+    adapter_states: list[CrawlRunAdapterStateResponse] = Field(default_factory=list)
 
 
 class CrawlRequest(BaseModel):

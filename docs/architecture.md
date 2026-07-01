@@ -43,6 +43,9 @@ Current adapters:
 `crawl resume --run-id` resumes from the adapter state recorded for that specific
 run, not from the newest global checkpoint.
 
+The API exposes those per-run adapter states on `GET /runs/{run_id}` alongside
+the run summary and recoverable errors.
+
 ## Data Model
 
 The canonical `Job` table stores normalized job records with source identity,

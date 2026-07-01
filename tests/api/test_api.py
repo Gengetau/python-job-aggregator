@@ -109,7 +109,18 @@ def test_admin_crawl_populates_jobs_and_runs(client: TestClient) -> None:
     assert runs_response.json()[0]["jobs_seen"] == 2
 
     run_id = crawl_response.json()["run_id"]
-    assert client.get(f"/runs/{run_id}").status_code == 200
+    run_response = client.get(f"/runs/{run_id}")
+    assert run_response.status_code == 200
+    run_payload = run_response.json()
+    assert len(run_payload["adapter_states"]) == 1
+    adapter_state = run_payload["adapter_states"][0]
+    assert adapter_state["run_id"] == run_id
+    assert adapter_state["adapter_name"] == "demo"
+    assert adapter_state["scope_key"] == "fixture"
+    assert adapter_state["checkpoint_before"] is None
+    assert adapter_state["checkpoint_after"] == "demo-complete"
+    assert adapter_state["created_at"]
+    assert adapter_state["updated_at"]
 
 
 def test_admin_crawl_passes_adapter_options_to_context() -> None:

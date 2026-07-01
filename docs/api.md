@@ -20,6 +20,7 @@ curl "http://localhost:8000/jobs?q=python&page=1&page_size=10"
 curl "http://localhost:8000/jobs?location_type=remote&employment_type=full_time"
 curl http://localhost:8000/sources
 curl http://localhost:8000/runs
+curl http://localhost:8000/runs/1
 curl "http://localhost:8000/dedupe/candidates?limit=20&scanned_limit=1000"
 curl -X POST http://localhost:8000/admin/crawl -H "Content-Type: application/json" -d "{\"adapters\":[\"demo\"]}"
 ```
@@ -41,6 +42,11 @@ curl "http://localhost:8000/dedupe/candidates?include_inactive=true"
 
 The API returns confidence and reason fields to support human decisions; it does
 not merge or mutate job records.
+
+Run detail responses from `GET /runs/{run_id}` include the run summary,
+recoverable `errors`, and `adapter_states`. Each adapter state exposes
+`adapter_name`, `scope_key`, `checkpoint_before`, and `checkpoint_after` so a
+client can inspect the checkpoint boundary captured for that specific run.
 
 OpenAPI docs are generated automatically at:
 

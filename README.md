@@ -250,6 +250,10 @@ curl http://127.0.0.1:8000/runs/1
 curl "http://127.0.0.1:8000/dedupe/candidates?limit=20&include_inactive=true"
 ```
 
+`GET /runs/{run_id}` returns the run summary, recoverable errors, and
+`adapter_states` with each adapter's scope and checkpoint before/after values
+captured for that run.
+
 More API examples are in [docs/api.md](docs/api.md).
 
 ## Docker
